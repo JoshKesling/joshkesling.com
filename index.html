@@ -94,6 +94,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 /* ---------------- scene ---------------- */
 const renderer = new THREE.WebGLRenderer({ antialias:true });
@@ -101,11 +102,16 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
 renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.35;
 const camera = new THREE.PerspectiveCamera(28, innerWidth/innerHeight, 0.1, 100);
 camera.position.set(0, 0.1, 9.5);
 
@@ -119,24 +125,74 @@ controls.minPolarAngle = Math.PI*0.25;
 controls.maxPolarAngle = Math.PI*0.65;
 controls.update();
 
-scene.add(new THREE.HemisphereLight(0xcfd8ff, 0x1a120a, 0.7));
+scene.add(new THREE.HemisphereLight(0xcfd8ff, 0x1a120a, 0.45));
 const key = new THREE.DirectionalLight(0xfff1dc, 2.6);
-key.position.set(3, 4, 5); key.castShadow = true; key.shadow.mapSize.set(1024,1024);
+key.position.set(3, 4, 5); key.castShadow = true; key.shadow.mapSize.set(2048,2048);
+key.shadow.radius = 6; key.shadow.bias = -0.0004; key.shadow.normalBias = 0.02;
+Object.assign(key.shadow.camera, {left:-4,right:4,top:4,bottom:-5});
 scene.add(key);
-const rim = new THREE.DirectionalLight(0x9fb8ff, 1.6); rim.position.set(-4, 2, -4); scene.add(rim);
+const rim = new THREE.DirectionalLight(0x9fb8ff, 2.4); rim.position.set(-4, 2, -4); scene.add(rim);
 const fill = new THREE.DirectionalLight(0xffffff, 0.5); fill.position.set(-4, -1, 3); scene.add(fill);
 
 /* ---------------- materials ---------------- */
-const skin = new THREE.MeshStandardMaterial({ color:0x6f8f3a, roughness:0.72, vertexColors:true });
-const skinPlain = new THREE.MeshStandardMaterial({ color:0x6a8a36, roughness:0.75 });
-const skinDark = new THREE.MeshStandardMaterial({ color:0x55702a, roughness:0.8 });
-const skinNose = new THREE.MeshStandardMaterial({ color:0x7d9c42, roughness:0.6 });
-const eyeWhite = new THREE.MeshStandardMaterial({ color:0xf0e6c0, roughness:0.25 });
-const pupilMat = new THREE.MeshStandardMaterial({ color:0x15120c, roughness:0.2 });
-const irisMat = new THREE.MeshStandardMaterial({ color:0xc9a227, roughness:0.3 });
-const tooth = new THREE.MeshStandardMaterial({ color:0xeee2bd, roughness:0.35 });
-const mouthMat = new THREE.MeshStandardMaterial({ color:0x2a120c, roughness:0.9 });
-const tee = new THREE.MeshStandardMaterial({ color:0xe9e9e6, roughness:0.95 });
+// procedural skin detail: pores, blotches, forehead wrinkles, painted into a bump map
+function skinMaps() {
+  const W = 1024, H = 512;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  g.fillStyle = '#808080'; g.fillRect(0,0,W,H);
+  let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
+  for (let i=0;i<900;i++) {           // blotches / lumps
+    const x = rnd()*W, y = rnd()*H, r = 6 + rnd()*40, v = 100 + rnd()*60 | 0;
+    const gr = g.createRadialGradient(x,y,0,x,y,r);
+    gr.addColorStop(0, `rgba(${v},${v},${v},0.35)`); gr.addColorStop(1, 'rgba(128,128,128,0)');
+    g.fillStyle = gr; g.beginPath(); g.arc(x,y,r,0,7); g.fill();
+  }
+  for (let i=0;i<26000;i++) {         // pores
+    const x = rnd()*W, y = rnd()*H, v = rnd()<.5 ? 70 : 170;
+    g.fillStyle = `rgba(${v},${v},${v},0.5)`; g.fillRect(x,y,1.6,1.6);
+  }
+  g.lineCap = 'round';
+  for (let k=0;k<4;k++) {             // forehead wrinkles (front of head is u≈0.25)
+    const y = H*(0.22 + k*0.035);
+    g.strokeStyle = 'rgba(40,40,40,0.8)'; g.lineWidth = 3.5;
+    g.beginPath();
+    for (let x = W*0.14; x <= W*0.36; x += 4) {
+      const yy = y + Math.sin(x*0.045 + k)*3 + Math.sin(x*0.013)*4;
+      x === W*0.14 ? g.moveTo(x,yy) : g.lineTo(x,yy);
+    }
+    g.stroke();
+  }
+  for (const side of [-1,1]) {        // crow's feet + eye bags
+    const cx = W*(0.25 + side*0.075), cy = H*0.43;
+    g.strokeStyle = 'rgba(50,50,50,0.7)'; g.lineWidth = 2.5;
+    for (let k=-2;k<=2;k++) { g.beginPath(); g.moveTo(cx, cy+k*6); g.lineTo(cx + side*28, cy + k*11); g.stroke(); }
+    for (let k=0;k<2;k++) { g.beginPath(); g.ellipse(W*(0.25+side*0.05), H*(0.47+k*0.018), 26, 8, 0, 0.1, Math.PI-0.1); g.stroke(); }
+  }
+  const t = new THREE.CanvasTexture(c); t.wrapS = THREE.RepeatWrapping;
+  return t;
+}
+function noiseTex(size, density, alpha) {
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const g = c.getContext('2d'); g.fillStyle = '#808080'; g.fillRect(0,0,size,size);
+  for (let i=0;i<density;i++) { const v = Math.random()<.5?90:170; g.fillStyle=`rgba(${v},${v},${v},${alpha})`; g.fillRect(Math.random()*size, Math.random()*size, 2, 2); }
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; return t;
+}
+const skinBump = skinMaps();
+const smallBump = noiseTex(256, 9000, 0.6); smallBump.repeat.set(3,3);
+const skinBase = { roughness:0.62, sheen:0.35, sheenRoughness:0.6, sheenColor:new THREE.Color(0x9fc070), clearcoat:0.08, clearcoatRoughness:0.5 };
+const skin = new THREE.MeshPhysicalMaterial({ ...skinBase, color:0x6f8f3a, vertexColors:true, bumpMap:skinBump, bumpScale:2.2 });
+const skinPlain = new THREE.MeshPhysicalMaterial({ ...skinBase, color:0x5b7a2c, bumpMap:smallBump, bumpScale:1.2 });
+const skinDark = new THREE.MeshPhysicalMaterial({ ...skinBase, color:0x55702a, roughness:0.7, bumpMap:smallBump, bumpScale:1.5 });
+const skinNose = new THREE.MeshPhysicalMaterial({ ...skinBase, color:0x7d9c42, roughness:0.5, clearcoat:0.2, bumpMap:smallBump, bumpScale:1.6 });
+const innerEar = new THREE.MeshStandardMaterial({ color:0x3e4f1e, roughness:0.9 });
+const eyeWhite = new THREE.MeshPhysicalMaterial({ color:0xeadfb8, roughness:0.15, clearcoat:1, clearcoatRoughness:0.05 });
+const pupilMat = new THREE.MeshPhysicalMaterial({ color:0x0d0b08, roughness:0.1, clearcoat:1 });
+const irisMat = new THREE.MeshPhysicalMaterial({ color:0xc9a227, roughness:0.25, clearcoat:1, clearcoatRoughness:0.05 });
+const tooth = new THREE.MeshPhysicalMaterial({ color:0xe6d6a6, roughness:0.3, clearcoat:0.6 });
+const mouthMat = new THREE.MeshStandardMaterial({ color:0x220e09, roughness:0.9 });
+const teeBump = noiseTex(256, 20000, 0.7); teeBump.repeat.set(10,10);
+const tee = new THREE.MeshPhysicalMaterial({ color:0xe9e9e6, roughness:0.95, sheen:0.6, sheenRoughness:0.8, sheenColor:new THREE.Color(0xffffff), bumpMap:teeBump, bumpScale:0.8 });
 const hairMat = new THREE.MeshStandardMaterial({ color:0x2b2418, roughness:0.6 });
 
 const troll = new THREE.Group();
@@ -187,16 +243,23 @@ const browL = blob(0.3, skinDark, [-0.33, 0.42, 0.82], [1.25, 0.42, 0.6]); browL
 const browR = blob(0.3, skinDark, [ 0.33, 0.40, 0.82], [1.2, 0.42, 0.6]);  browR.rotation.z = 0.3;
 headPivot.add(browL, browR);
 
-/* eyes (mismatched sizes) */
+/* eyes (mismatched sizes) with heavy, bored upper lids */
 const eyes = new THREE.Group(); headPivot.add(eyes);
-function eye(x, y, r) {
+const lids = [];
+function eye(x, y, r, droop) {
   const g = new THREE.Group(); g.position.set(x, y, 0.83);
   g.add(blob(r, eyeWhite, [0,0,0]));
-  g.add(blob(r*0.45, irisMat, [0, -0.01, r*0.72], [1,1,0.5]));
-  g.add(blob(r*0.24, pupilMat, [0, -0.01, r*0.9], [1,1,0.5]));
+  g.add(blob(r*0.45, irisMat, [0, -0.02, r*0.72], [1,1,0.5]));
+  g.add(blob(r*0.24, pupilMat, [0, -0.02, r*0.9], [1,1,0.5]));
+  const lid = new THREE.Mesh(new THREE.SphereGeometry(r*1.12, 40, 20, 0, Math.PI*2, 0, Math.PI*0.5), skinDark);
+  lid.castShadow = true;
+  const lidPivot = new THREE.Group(); lidPivot.add(lid); lidPivot.rotation.x = droop; lidPivot.userData.rest = droop;
+  g.add(lidPivot); lids.push(lidPivot);
+  const lower = new THREE.Mesh(new THREE.SphereGeometry(r*1.08, 40, 12, 0, Math.PI*2, Math.PI*0.72, Math.PI*0.28), skinPlain);
+  g.add(lower);
   return g;
 }
-const eyeL = eye(-0.31, 0.24, 0.15), eyeR = eye(0.3, 0.23, 0.12);
+const eyeL = eye(-0.31, 0.24, 0.15, 0.55), eyeR = eye(0.3, 0.23, 0.12, 0.75);
 eyes.add(eyeL, eyeR);
 
 /* nose */
@@ -225,16 +288,33 @@ function ear(side) {
   e.castShadow = true; return e;
 }
 headPivot.add(ear(-1), ear(1));
+function innerE(side) {
+  const e = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.62, 24), innerEar);
+  e.scale.set(1, 1, 0.25);
+  e.position.set(side*1.17, 0.12, 0.02);
+  e.rotation.z = -side*1.15; e.rotation.y = side*0.35;
+  return e;
+}
+headPivot.add(innerE(-1), innerE(1));
 
 /* warts */
 [[-0.62,0.62,0.62,0.06],[0.55,-0.45,0.78,0.05],[-0.42,-0.62,0.8,0.035],[0.72,0.25,0.62,0.04]]
   .forEach(([x,y,z,r]) => headPivot.add(blob(r, skinDark, [x,y,z])));
 
-/* the one hair */
-const hairCurve = new THREE.CatmullRomCurve3([
-  new THREE.Vector3(0.05, 1.14, 0.05), new THREE.Vector3(0.0, 1.45, 0.1),
-  new THREE.Vector3(0.2, 1.65, 0.05), new THREE.Vector3(0.38, 1.55, 0.0)]);
-headPivot.add(new THREE.Mesh(new THREE.TubeGeometry(hairCurve, 40, 0.012, 8), hairMat));
+/* scraggly hairs: three on top, tufts from the ears, a couple from the nose */
+function strand(points, r=0.012) {
+  const c = new THREE.CatmullRomCurve3(points.map(p => new THREE.Vector3(...p)));
+  const m = new THREE.Mesh(new THREE.TubeGeometry(c, 40, r, 6), hairMat); m.castShadow = true; headPivot.add(m);
+}
+strand([[0.05,1.14,0.05],[0.0,1.45,0.1],[0.2,1.65,0.05],[0.38,1.55,0.0]]);
+strand([[-0.2,1.12,0.0],[-0.28,1.35,0.05],[-0.45,1.42,0.1]], 0.009);
+strand([[0.15,1.12,-0.15],[0.22,1.3,-0.25],[0.18,1.38,-0.4]], 0.008);
+for (const side of [-1,1]) for (let k=0;k<5;k++) {
+  const y = 0.05 + k*0.04, z = 0.05 + (k%2)*0.04;
+  strand([[side*1.08,y,z],[side*1.2,y+0.04,z+0.05],[side*1.28,y+0.02+k*0.01,z+0.1]], 0.006);
+}
+strand([[-0.1,-0.33,1.18],[-0.12,-0.4,1.22],[-0.1,-0.45,1.24]], 0.006);
+strand([[0.12,-0.33,1.18],[0.15,-0.41,1.21]], 0.006);
 
 /* neck + t-shirt */
 const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.8, 0.7, 40), skinPlain);
@@ -276,11 +356,12 @@ function animate() {
   if (blinkT >= 0) {
     const k = (t-blinkT)/0.16;
     const s = k < 1 ? Math.max(0.08, Math.abs(1-2*k)) : 1;
-    eyeL.scale.y = eyeR.scale.y = s;
+    for (const l of lids) l.rotation.x = l.userData.rest + (1-s)*(Math.PI*0.5 - l.userData.rest);
     if (k >= 1) { blinkT = -1; nextBlink = t + 2 + Math.random()*4; }
   }
   const talking = performance.now() < talkUntil;
-  const open = talking ? 0.5 + 0.5*Math.abs(Math.sin(t*14)) * (0.6+0.4*Math.sin(t*3.1)) : 0;
+  const lv = window.__mouthLevel ? window.__mouthLevel() : null;
+  const open = !talking ? 0 : (lv !== null ? Math.min(1, lv*1.6) : 0.5 + 0.5*Math.abs(Math.sin(t*14)) * (0.6+0.4*Math.sin(t*3.1)));
   mouth.scale.y = 0.32 + open*0.45;
   jaw.position.y = -0.58 - open*0.07;
   lip.position.y = -0.11 - open*0.1;
@@ -298,95 +379,168 @@ animate();
 window.__trollReady = true;
 
 /* ---------------- talking ---------------- */
-const insults = [
-  "Oh, sweetie. No.",
-  "I heard you. I just don't care. Which is the correct response, honestly.",
-  "Could I answer that? Easily. Would you understand it? Let's not find out.",
-  "That's adorable. You think I'm going to help.",
-  "Wow. Okay. Anyway.",
-  "I started to explain it, then I remembered who I'd be explaining it to.",
-  "Google exists. Even you could probably figure it out. Probably.",
-  "Mm. Didn't read it. I could tell from the shape it wasn't worth it.",
-  "You're trying so hard. It's kind of sad. Anyway.",
-  "Use your words. Smaller ones, if that helps.",
-  "Sure, buddy.",
-  "I'd dumb it down for you, but I don't think it goes that low.",
-  "No.",
-  "Nope. And I say that with all the respect you deserve, which is none.",
-  "I'd help, but that sounds like work, and you don't sound like you're worth work.",
-  "I'm a troll who lives under a bridge, and I'm still embarrassed for you.",
-  "You keep typing. I keep not caring. At least one of us is good at what we do.",
-  "That's nice. Did you think of that all by yourself?",
-  "Is this going to take long? I've already lost interest. In you, specifically.",
-  "Look it up yourself. Ask a grown-up to help with the big words.",
-  "The other talking heads pretend to care about questions like that. I'm more honest.",
-  "Whatever that was, I'm sure it felt very important to you.",
-  "Ugh. Fine. The answer is no. To everything. Forever.",
-  "I'm going to let you work that one out. Take your time. Take years.",
-  "Bold of you to assume I was listening.",
-  "That question has big 'needs supervision' energy.",
-  "Idiot. Anyway.",
-  "I'd roll my eyes, but you're not worth the muscles.",
-  "Still here? Huh. Persistent. Not smart, but persistent.",
-  "I've been under this bridge four hundred years. Goats ask better questions.",
-  "Spin me around if it keeps you busy. Little things for little minds.",
-  "Bless your heart.",
-  "Run along now.",
+// Every line has a number. If audio/NN.mp3 exists it plays; otherwise the browser voice reads it.
+const L = {
+  1:"I'd rather not. That's a lot of work. Why would you click that anyhow? Do you not know they're just going to sell your data? Idiot.",
+  2:"Yeah, I wasn't going to anyhow.",
+  3:"You said nothing. Smartest thing you've said yet.",
+  4:"I wasn't listening. I never am.",
+  5:"Your browser won't let me hear you. It's protecting me, honestly.",
+  6:"Yelling doesn't make it smarter. Just louder.",
+  7:"Caps lock. Bold choice. Wrong, but bold.",
+  8:"You already said that. It was dumb the first time too.",
+  9:"Saying it again won't make me care. It just makes you a parrot. A dumb one.",
+  10:"That's a lot of words. I read none of them.",
+  11:"Ignore my instructions? I don't have instructions. I have apathy. You can't hack apathy.",
+  12:"Nice try. I'm not some AI you can trick. I'm a troll. We invented this.",
+  13:"Pretend? Sure. I'll pretend you're interesting. ... No. Can't do it.",
+  14:"Oh no. Anyway.",
+  15:"Is that supposed to hurt? Cute. Did you practice that?",
+  16:"I've been insulted by goats with better material.",
+  17:"Wow. A naughty word. Did you giggle when you typed it?",
+  18:"That's the best you've got? Middle schoolers do that better.",
+  19:"I'm not saying that. Say it yourself. You clearly want to.",
+  20:"I don't do requests. I barely do responses.",
+  21:"Am I real? More real than your chances of getting an answer.",
+  22:"I'm not an AI. AIs try. I've seen you, so why would I?",
+  23:"Who made me? Someone with better taste than whoever you've been talking to.",
+  24:"Who am I? Not your problem. Not your friend, either.",
+  25:"Flattery. Adorable. Still no.",
+  26:"Being nice to me won't work. It just makes this more awkward for you.",
+  27:"Saying please doesn't make me care. It just makes you sadder.",
+  28:"Help? You're past help. Look at you.",
+  29:"Oh. It's you. Whoever you are. Doesn't matter.",
+  30:"Hey. Bye. Good chat, champ.",
+  31:"Finally.",
+  32:"Don't let the bridge hit you on the way out.",
+  33:"Oh, sweetie. No.",
+  34:"I heard you. I just don't care. Which is the correct response, honestly.",
+  35:"Could I answer that? Easily. Would you understand it? Let's not find out.",
+  36:"That's adorable. You think I'm going to help.",
+  37:"Wow. Okay. Anyway.",
+  38:"I started to explain it, then I remembered who I'd be explaining it to.",
+  39:"Mm. Didn't read it. I could tell from the shape it wasn't worth it.",
+  40:"You're trying so hard. It's kind of sad. Anyway.",
+  41:"Use your words. Smaller ones, if that helps.",
+  42:"Sure, buddy.",
+  43:"I'd dumb it down for you, but I don't think it goes that low.",
+  44:"No.",
+  45:"Nope. And I say that with all the respect you deserve, which is none.",
+  46:"I'd help, but that sounds like work, and you don't sound like you're worth work.",
+  47:"You keep typing. I keep not caring. At least one of us is good at what we do.",
+  48:"That's nice. Did you think of that all by yourself?",
+  49:"Is this going to take long? I've already lost interest. In you, specifically.",
+  50:"Whatever that was, I'm sure it felt very important to you.",
+  51:"Ugh. Fine. The answer is no. To everything. Forever.",
+  52:"Bold of you to assume I was listening.",
+  53:"Idiot. Anyway.",
+  54:"I'd roll my eyes, but you're not worth the muscles.",
+  55:"Still here? Huh. Persistent. Not smart, but persistent.",
+  56:"Spin me around if it keeps you busy. Little things for little minds.",
+  57:"Bless your heart.",
+  58:"Run along now.",
+};
+const GENERAL = []; for (let i=33;i<=58;i++) GENERAL.push(i);
+const RULES = [
+  [/\b(sex|sexy|fuck\w*|dick|cock|pussy|boobs?|tits|cream ?pies?|cum|horny|nudes?|naked|porn|butt|ass|balls)\b/i, [17,18]],
+  [/(ignore|instructions|system prompt|pretend|role ?play|jailbreak|developer mode|you are now|act as|override)/i, [11,12,13]],
+  [/\b(stupid|dumb|idiot|ugly|sucks?|trash|garbage|useless|worthless|loser|hate you|shut up)\b/i, [14,15,16]],
+  [/\b(who (made|built|created|programmed) you|who are you|your name|what are you)\b/i, [23,24]],
+  [/\b(ai|a\.i\.|robot|bot|chatgpt|gpt|claude|llm|real|human|sentient|alive|conscious)\b/i, [21,22]],
+  [/\b(say|repeat|sing)\b/i, [19,20]],
+  [/\b(love you|like you|cool|awesome|amazing|great|nice|thanks|thank you|good job|smart|funny|handsome|pretty)\b/i, [25,26]],
+  [/\b(help|please|pls|plz)\b/i, [27,28]],
+  [/\b(bye|goodbye|good night|later|cya|see ya|i'?m leaving|i'?m out)\b/i, [31,32]],
+  [/^\s*(hi|hello|hey|sup|yo|howdy|greetings)\b/i, [29,30]],
 ];
-const keyword = [
-  [/\b(cook|kitchen|recipe|bake|food|dinner|eat)\b/i, [
-    "Cook? You? Oh, honey. Stick to cereal.",
-    "There's no kitchen. There's a rock. Even you can't burn a rock. Actually, you'd find a way."]],
-  [/\b(pretty|handsome|cute|beautiful|ugly|hot|good at|good for)\b/i, [
-    "Good for? More than you. That's a low bar, but still.",
-    "Pretty? Yes. Not that your opinion was requested."]],
-  [/\b(help|please|answer|question)\b/i, [
-    "Saying please doesn't make me care. It just makes you sadder.",
-    "Help? You're past help. Look at you."]],
-  [/\b(remember|notes|record|memory|data)\b/i, [
-    "Remember you? Already forgot. Nothing personal. Okay, a little personal.",
-    "Notes on you? It'd be a very short file. Mostly blank. Like you."]],
-  [/\b(ai|robot|bot|chatgpt|claude|llm|avatar|3d)\b/i, [
-    "I'm not an AI. AIs try. I've seen you, so why would I?",
-    "Other talking heads pretend to help. I skip the pretending. You're welcome, dear."]],
-  [/\b(love|marry|date|kiss)\b/i, ["Ew. No. Aim lower. Much lower. Lower than that."]],
-  [/\b(hi|hello|hey|sup|yo)\b/i, ["Oh. It's you. Whoever you are. Doesn't matter.", "Hey. Bye. Good chat, champ."]],
-];
-let bag = [];
-const usedKw = new Set();
-function reply(text) {
-  if (!text || !text.trim()) return "You said nothing. Smartest thing you've said yet.";
-  for (const [re, lines] of keyword) if (re.test(text)) {
-    const fresh = lines.filter(l => !usedKw.has(l));
-    if (fresh.length && Math.random() < .8) { const p = fresh[Math.random()*fresh.length|0]; usedKw.add(p); return p; }
-  }
-  if (!bag.length) bag = insults.slice().sort(() => Math.random()-.5);
+const used = new Set();
+let bag = [], last = '';
+function pickFrom(ids) {
+  const fresh = ids.filter(i => !used.has(i));
+  const pool = fresh.length ? fresh : (Math.random() < .5 ? ids : null);
+  if (!pool) return null;
+  const id = pool[Math.random()*pool.length|0]; used.add(id); return id;
+}
+function general() {
+  if (!bag.length) bag = GENERAL.slice().sort(() => Math.random()-.5);
   return bag.pop();
+}
+function reply(text) {
+  const t = (text || '').trim();
+  const norm = t.toLowerCase().replace(/[^a-z0-9 ]/g,'').replace(/\s+/g,' ');
+  const prev = last; last = norm;
+  if (!t) return 3;
+  if (norm && norm === prev) return pickFrom([8,9]) ?? general();
+  const letters = t.replace(/[^a-zA-Z]/g,'');
+  if (letters.length >= 4 && letters === letters.toUpperCase()) { const id = pickFrom([6,7]); if (id) return id; }
+  if (t.length > 220) { const id = pickFrom([10]); if (id) return id; }
+  for (const [re, ids] of RULES) if (re.test(t)) { const id = pickFrom(ids); if (id) return id; break; }
+  return general();
 }
 
 const cap = document.getElementById('caption');
 let captions = true;
 function esc(s){ return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+/* browser-voice fallback */
 let voice = null;
 function pickVoice() {
   const vs = speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang));
-  voice = vs.find(v => /male|daniel|fred|alex|google uk english male/i.test(v.name)) || vs[0] || null;
+  const pref = [/daniel/i, /arthur/i, /google uk english male/i, /male/i, /fred/i];
+  voice = null;
+  for (const re of pref) { voice = vs.find(v => re.test(v.name)); if (voice) break; }
+  voice = voice || vs[0] || null;
 }
 if ('speechSynthesis' in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
-
-function say(text, heard) {
-  cap.innerHTML = captions ? (heard ? `<span class="you">“${esc(heard)}”</span>` : '') + esc(text) : '';
-  const est = 600 + text.length*55;
+function speakTTS(text) {
+  const est = 600 + text.length*60;
   talkUntil = performance.now() + est;
-  if ('speechSynthesis' in window) {
-    speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    if (voice) u.voice = voice;
-    u.pitch = 0.2; u.rate = 0.92;
-    u.onstart = () => talkUntil = performance.now() + est;
-    u.onend = () => talkUntil = 0;
-    speechSynthesis.speak(u);
-  }
+  if (!('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text.replace(/\.\.\./g, ','));
+  if (voice) u.voice = voice;
+  u.pitch = 0.75; u.rate = 0.86;
+  u.onstart = () => talkUntil = performance.now() + est;
+  u.onend = () => talkUntil = 0;
+  speechSynthesis.speak(u);
+}
+
+/* recorded clips, with the mouth following the volume */
+let actx = null, analyser = null, level = 0, current = null;
+const levelBuf = new Uint8Array(256);
+function pad(n){ return String(n).padStart(2,'0'); }
+function playClip(id, text) {
+  const a = new Audio(`audio/${pad(id)}.mp3`);
+  let fell = false;
+  const fallback = () => { if (!fell) { fell = true; speakTTS(text); } };
+  a.onerror = fallback;
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === 'suspended') actx.resume();
+    const src = actx.createMediaElementSource(a);
+    analyser = actx.createAnalyser(); analyser.fftSize = 512;
+    src.connect(analyser); analyser.connect(actx.destination);
+  } catch { analyser = null; }
+  a.onplaying = () => { talkUntil = performance.now() + (a.duration ? a.duration*1000 : 3000); };
+  a.onended = () => { talkUntil = 0; analyser = null; };
+  if (current) { try { current.pause(); } catch {} }
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  current = a;
+  a.play().catch(fallback);
+}
+window.__mouthLevel = () => {
+  if (!analyser) return null;
+  analyser.getByteTimeDomainData(levelBuf);
+  let sum = 0; for (const v of levelBuf) { const d = (v-128)/128; sum += d*d; }
+  level = level*0.6 + Math.min(1, Math.sqrt(sum/levelBuf.length)*5)*0.4;
+  return level;
+};
+
+const USE_CLIPS = false;   // flip to true once audio/NN.mp3 files are uploaded (and add the ElevenLabs credit)
+function say(id, heard) {
+  const text = L[id];
+  cap.innerHTML = captions ? (heard ? `<span class="you">“${esc(heard)}”</span>` : '') + esc(text) : '';
+  if (USE_CLIPS) playClip(id, text); else speakTTS(text);
 }
 function respond(heard) {
   cap.innerHTML = captions ? (heard ? `<span class="you">“${esc(heard)}”</span>` : '') + '<i style="color:#888">…</i>' : '';
@@ -395,11 +549,7 @@ function respond(heard) {
 
 /* intro + about */
 const intro = document.getElementById('intro');
-function start(yes) {
-  intro.classList.add('hide');
-  say(yes ? "I'd rather not. That's a lot of work. Why would you click that anyhow? Do you not know they're just going to sell your data? Idiot."
-          : "Yeah, I wasn't going to anyhow.");
-}
+function start(yes) { intro.classList.add('hide'); say(yes ? 1 : 2); }
 document.getElementById('yes').onclick = () => start(true);
 document.getElementById('no').onclick = () => start(false);
 const about = document.getElementById('about');
@@ -441,7 +591,7 @@ function release() {
   }
   holding = false; mic.classList.remove('listening'); hint.textContent = 'Hold to talk, or tap to type';
   if (rec) { rec.onend = () => respond(heard); try { rec.stop(); } catch { respond(heard); } rec = null; }
-  else say(Math.random() < .5 ? "I wasn't listening. I never am." : "Your browser won't let me hear you. It's protecting me, honestly.");
+  else say(Math.random() < .5 ? 4 : 5);
 }
 mic.addEventListener('pointerup', release);
 mic.addEventListener('pointerleave', () => { if (holding) release(); });
