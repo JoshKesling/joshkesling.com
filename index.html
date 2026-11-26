@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Troll, in 3D</title>
+<meta name="description" content="A 3D troll you can turn around, zoom in on and talk to. It does not care.">
+<style>
+  :root { --ink:#f2f2f2; --dim:#9a9a9a; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:#000; color:var(--ink);
+    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Helvetica, Arial, sans-serif; overflow:hidden; }
+  canvas { display:block; touch-action:none; }
+  .round { position:fixed; width:44px; height:44px; border-radius:50%; border:1px solid rgba(255,255,255,.55);
+    background:rgba(0,0,0,.35); color:#fff; display:grid; place-items:center; cursor:pointer; font-size:13px; user-select:none; }
+  #info { top:18px; right:18px; font-family:Georgia, serif; font-size:16px; }
+  #cc { bottom:22px; left:22px; background:#fff; color:#000; font-weight:600; font-size:11px; }
+  #cc.off { background:rgba(0,0,0,.35); color:#fff; }
+  #mic { bottom:22px; right:22px; width:52px; height:52px; touch-action:none; }
+  #mic.listening { background:#b3261e; border-color:#ff8a80; animation:pulse 1s infinite; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(255,80,60,.6)} 100%{box-shadow:0 0 0 18px rgba(255,80,60,0)} }
+  #hint { position:fixed; bottom:38px; right:86px; font-size:13px; color:#ddd; pointer-events:none; }
+  #caption { position:fixed; left:50%; bottom:92px; transform:translateX(-50%); width:min(680px,88vw);
+    text-align:center; font-size:clamp(16px,2.2vw,21px); line-height:1.4; text-shadow:0 2px 8px #000;
+    pointer-events:none; min-height:1.4em; }
+  #caption .you { color:var(--dim); font-size:.8em; display:block; margin-bottom:6px; }
+  #typebox { position:fixed; left:50%; bottom:22px; transform:translateX(-50%); width:min(560px,70vw);
+    display:none; gap:8px; }
+  #typebox.show { display:flex; }
+  #typebox input { flex:1; background:rgba(20,20,20,.9); color:#fff; border:1px solid #555; border-radius:24px;
+    padding:12px 16px; font:inherit; font-size:15px; }
+  #typebox input:focus { outline:none; border-color:#aaa; }
+  #typebox button { border:0; border-radius:24px; padding:0 18px; background:#fff; color:#000; font:inherit; font-weight:600; cursor:pointer; }
+  .modal { position:fixed; inset:0; display:grid; place-items:center; background:rgba(0,0,0,.35); z-index:10; }
+  .modal.hide { display:none; }
+  .card { width:min(400px,88vw); background:rgba(10,10,10,.88); border:1px solid rgba(255,255,255,.6);
+    border-radius:16px; padding:22px; backdrop-filter:blur(6px); }
+  .card h2 { margin:0 0 12px; font-size:19px; font-weight:500; }
+  .card p { margin:0 0 12px; font-size:14px; line-height:1.5; color:#ddd; }
+  .card small { display:block; color:var(--dim); font-size:12px; margin-bottom:16px; }
+  .btns { display:flex; gap:10px; }
+  .btns button { flex:1; padding:11px; border-radius:22px; font:inherit; font-size:14px; cursor:pointer;
+    border:1px solid #fff; background:transparent; color:#fff; }
+  .btns button.primary { background:#fff; color:#000; }
+  #loading { position:fixed; bottom:22px; right:22px; width:44px; height:44px; border-radius:50%;
+    border:1px solid #888; display:grid; place-items:center; font-size:12px; }
+  .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<h1 class="sr">The Troll, in 3D</h1>
+<p class="sr">A 3D troll you can turn around, zoom in on and talk to. It is a fictional character and it will not help you.</p>
+
+<div id="loading">…</div>
+<div id="caption" aria-live="polite"></div>
+
+<div class="round" id="info" title="About" role="button" aria-label="About">i</div>
+<div class="round" id="cc" title="Captions" role="button" aria-label="Toggle captions">CC</div>
+<div id="hint">Hold to talk, or tap to type</div>
+<div class="round" id="mic" title="Hold to talk, or tap to type" role="button" aria-label="Talk to the troll">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+</div>
+
+<form id="typebox">
+  <input id="q" maxlength="300" autocomplete="off" placeholder="Go ahead. Ask something dumb.">
+  <button>Ask</button>
+</form>
+
+<div class="modal" id="intro">
+  <div class="card">
+    <h2>Before we talk</h2>
+    <p>Do you want me to remember you?</p>
+    <small>Pick one. Take your time, I know buttons are hard.</small>
+    <div class="btns">
+      <button class="primary" id="yes">Yes</button>
+      <button id="no">No</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hide" id="about">
+  <div class="card">
+    <h2>What I have on you</h2>
+    <p>Nothing. Couldn't be bothered. You understand. Or you don't. Either way.</p>
+    <small>The Troll is a fictional character. Any resemblance to a helpful assistant is purely accidental.</small>
+    <div class="btns"><button class="primary" id="closeAbout">Okay</button></div>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.187.0/build/three.module.js",
+               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.187.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ---------------- scene ---------------- */
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.shadowMap.enabled = true;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+const camera = new THREE.PerspectiveCamera(28, innerWidth/innerHeight, 0.1, 100);
+camera.position.set(0, 0.1, 9.5);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, -0.35, 0);
+controls.enableDamping = true;
+controls.enablePan = false;
+controls.minDistance = 4;
+controls.maxDistance = 14;
+controls.minPolarAngle = Math.PI*0.25;
+controls.maxPolarAngle = Math.PI*0.65;
+controls.update();
+
+scene.add(new THREE.HemisphereLight(0xcfd8ff, 0x1a120a, 0.7));
+const key = new THREE.DirectionalLight(0xfff1dc, 2.6);
+key.position.set(3, 4, 5); key.castShadow = true; key.shadow.mapSize.set(1024,1024);
+scene.add(key);
+const rim = new THREE.DirectionalLight(0x9fb8ff, 1.6); rim.position.set(-4, 2, -4); scene.add(rim);
+const fill = new THREE.DirectionalLight(0xffffff, 0.5); fill.position.set(-4, -1, 3); scene.add(fill);
+
+/* ---------------- materials ---------------- */
+const skin = new THREE.MeshStandardMaterial({ color:0x6f8f3a, roughness:0.72, vertexColors:true });
+const skinPlain = new THREE.MeshStandardMaterial({ color:0x6a8a36, roughness:0.75 });
+const skinDark = new THREE.MeshStandardMaterial({ color:0x55702a, roughness:0.8 });
+const skinNose = new THREE.MeshStandardMaterial({ color:0x7d9c42, roughness:0.6 });
+const eyeWhite = new THREE.MeshStandardMaterial({ color:0xf0e6c0, roughness:0.25 });
+const pupilMat = new THREE.MeshStandardMaterial({ color:0x15120c, roughness:0.2 });
+const irisMat = new THREE.MeshStandardMaterial({ color:0xc9a227, roughness:0.3 });
+const tooth = new THREE.MeshStandardMaterial({ color:0xeee2bd, roughness:0.35 });
+const mouthMat = new THREE.MeshStandardMaterial({ color:0x2a120c, roughness:0.9 });
+const tee = new THREE.MeshStandardMaterial({ color:0xe9e9e6, roughness:0.95 });
+const hairMat = new THREE.MeshStandardMaterial({ color:0x2b2418, roughness:0.6 });
+
+const troll = new THREE.Group();
+scene.add(troll);
+const headPivot = new THREE.Group();
+headPivot.position.set(0, 0.0, 0);
+troll.add(headPivot);
+
+/* ---- lumpy head ---- */
+function lumpyHead() {
+  const g = new THREE.SphereGeometry(1, 160, 120);
+  const p = g.attributes.position, v = new THREE.Vector3();
+  const colors = [];
+  const base = new THREE.Color(0x6f8f3a);
+  for (let i=0;i<p.count;i++) {
+    v.fromBufferAttribute(p,i);
+    // overall shape: tall, wide heavy jaw, flatter back
+    let sx = 1.0, sy = 1.18, sz = 0.98;
+    const jaw = THREE.MathUtils.smoothstep(-v.y, 0.1, 0.9);   // more width low
+    sx += jaw*0.22; sz += jaw*0.08;
+    const top = THREE.MathUtils.smoothstep(v.y, 0.5, 1.0);
+    sx -= top*0.12;
+    if (v.z < 0) sz -= 0.08;
+    // lumps
+    const n = 0.018*Math.sin(v.x*7.1+v.y*3.3) + 0.015*Math.sin(v.y*9.2+v.z*5.7)
+            + 0.01*Math.sin(v.z*11.3+v.x*4.1) + 0.006*Math.sin((v.x+v.y+v.z)*14.0);
+    v.set(v.x*sx, v.y*sy, v.z*sz).multiplyScalar(1+n);
+    p.setXYZ(i, v.x, v.y, v.z);
+    const c = base.clone().offsetHSL(0.01*Math.sin(v.y*5), 0, n*0.8 + 0.015*Math.sin(v.x*13+v.z*9));
+    colors.push(c.r, c.g, c.b);
+  }
+  g.setAttribute('color', new THREE.Float32BufferAttribute(colors,3));
+  g.computeVertexNormals();
+  return g;
+}
+const head = new THREE.Mesh(lumpyHead(), skin);
+head.castShadow = head.receiveShadow = true;
+headPivot.add(head);
+
+function blob(r, mat, pos, scale=[1,1,1], seg=48) {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(r, seg, seg*0.75|0), mat);
+  m.position.set(...pos); m.scale.set(...scale); m.castShadow = true;
+  return m;
+}
+
+/* brow ridge */
+const browL = blob(0.3, skinDark, [-0.33, 0.42, 0.82], [1.25, 0.42, 0.6]); browL.rotation.z = -0.25;
+const browR = blob(0.3, skinDark, [ 0.33, 0.40, 0.82], [1.2, 0.42, 0.6]);  browR.rotation.z = 0.3;
+headPivot.add(browL, browR);
+
+/* eyes (mismatched sizes) */
+const eyes = new THREE.Group(); headPivot.add(eyes);
+function eye(x, y, r) {
+  const g = new THREE.Group(); g.position.set(x, y, 0.83);
+  g.add(blob(r, eyeWhite, [0,0,0]));
+  g.add(blob(r*0.45, irisMat, [0, -0.01, r*0.72], [1,1,0.5]));
+  g.add(blob(r*0.24, pupilMat, [0, -0.01, r*0.9], [1,1,0.5]));
+  return g;
+}
+const eyeL = eye(-0.31, 0.24, 0.15), eyeR = eye(0.3, 0.23, 0.12);
+eyes.add(eyeL, eyeR);
+
+/* nose */
+headPivot.add(blob(0.27, skinNose, [0, 0.02, 1.0], [0.85, 1.25, 1.0]));
+headPivot.add(blob(0.27, skinNose, [0, -0.2, 1.17], [1.15, 0.95, 1.0]));
+headPivot.add(blob(0.045, pupilMat, [-0.11, -0.33, 1.2]));
+headPivot.add(blob(0.045, pupilMat, [ 0.11, -0.33, 1.2]));
+
+/* mouth (jaw group animates) */
+const jaw = new THREE.Group(); jaw.position.set(0, -0.58, 0.86); headPivot.add(jaw);
+const mouth = blob(0.34, mouthMat, [0,0,0], [1.35, 0.32, 0.45]); jaw.add(mouth);
+const lip = blob(0.34, skinNose, [0, -0.11, 0.05], [1.35, 0.3, 0.5]); jaw.add(lip);
+function tusk(x, tilt) {
+  const t = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.32, 20), tooth);
+  t.position.set(x, 0.03, 0.12); t.rotation.z = tilt; t.castShadow = true; return t;
+}
+jaw.add(tusk(-0.28, 0.18), tusk(0.3, -0.12));
+const snag = new THREE.Mesh(new THREE.BoxGeometry(0.08,0.08,0.04), tooth); snag.position.set(0.05, 0.07, 0.14); jaw.add(snag);
+
+/* ears */
+function ear(side) {
+  const e = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.95, 32), skinPlain);
+  e.scale.set(1, 1, 0.35);
+  e.position.set(side*1.15, 0.12, -0.05);
+  e.rotation.z = -side*1.15; e.rotation.y = side*0.35;
+  e.castShadow = true; return e;
+}
+headPivot.add(ear(-1), ear(1));
+
+/* warts */
+[[-0.62,0.62,0.62,0.06],[0.55,-0.45,0.78,0.05],[-0.42,-0.62,0.8,0.035],[0.72,0.25,0.62,0.04]]
+  .forEach(([x,y,z,r]) => headPivot.add(blob(r, skinDark, [x,y,z])));
+
+/* the one hair */
+const hairCurve = new THREE.CatmullRomCurve3([
+  new THREE.Vector3(0.05, 1.14, 0.05), new THREE.Vector3(0.0, 1.45, 0.1),
+  new THREE.Vector3(0.2, 1.65, 0.05), new THREE.Vector3(0.38, 1.55, 0.0)]);
+headPivot.add(new THREE.Mesh(new THREE.TubeGeometry(hairCurve, 40, 0.012, 8), hairMat));
+
+/* neck + t-shirt */
+const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.8, 0.7, 40), skinPlain);
+neck.position.set(0, -1.22, -0.05); neck.scale.z = 0.75; troll.add(neck);
+const torsoPts = [];
+for (let i=0;i<=24;i++) {
+  const t = i/24, y = -1.55 - t*2.2;
+  const r = 0.86 + Math.sin(Math.min(t*2.2,1)*Math.PI/2)*1.55 + t*0.15;
+  torsoPts.push(new THREE.Vector2(r, y));
+}
+const torso = new THREE.Mesh(new THREE.LatheGeometry(torsoPts, 80), tee);
+torso.scale.set(1, 1, 0.7); torso.receiveShadow = true; troll.add(torso);
+const neckCap = new THREE.Mesh(new THREE.CircleGeometry(0.86, 40), tee); neckCap.rotation.x = -Math.PI/2; neckCap.scale.y = 0.7; neckCap.position.y = -1.55;
+troll.add(neckCap);
+const collar = new THREE.Mesh(new THREE.TorusGeometry(0.84, 0.05, 12, 60), new THREE.MeshStandardMaterial({color:0xd6d6d2, roughness:1}));
+collar.rotation.x = Math.PI/2; collar.scale.set(1, 0.7, 1); collar.position.set(0, -1.57, -0.03); troll.add(collar);
+
+troll.position.y = 0.2;
+
+/* fade-out at the bottom like a studio bust */
+const fade = new THREE.Mesh(new THREE.PlaneGeometry(20, 4), new THREE.ShaderMaterial({
+  transparent:true, depthWrite:false,
+  vertexShader:'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }',
+  fragmentShader:'varying vec2 vUv; void main(){ gl_FragColor=vec4(0.,0.,0.,1.-smoothstep(0.,0.9,vUv.y)); }'
+}));
+fade.position.set(0, -3.9, 1.6); scene.add(fade);
+
+/* ---------------- animation ---------------- */
+let talkUntil = 0, nextBlink = 2, blinkT = -1;
+const clock = new THREE.Timer();
+function animate() {
+  clock.update(); const t = clock.getElapsed();
+  headPivot.rotation.y = Math.sin(t*0.4)*0.08;
+  headPivot.rotation.z = Math.sin(t*0.27)*0.03;
+  headPivot.rotation.x = Math.sin(t*0.33)*0.03;
+  troll.position.y = 0.2 + Math.sin(t*0.9)*0.02;
+
+  if (t > nextBlink && blinkT < 0) blinkT = t;
+  if (blinkT >= 0) {
+    const k = (t-blinkT)/0.16;
+    const s = k < 1 ? Math.max(0.08, Math.abs(1-2*k)) : 1;
+    eyeL.scale.y = eyeR.scale.y = s;
+    if (k >= 1) { blinkT = -1; nextBlink = t + 2 + Math.random()*4; }
+  }
+  const talking = performance.now() < talkUntil;
+  const open = talking ? 0.5 + 0.5*Math.abs(Math.sin(t*14)) * (0.6+0.4*Math.sin(t*3.1)) : 0;
+  mouth.scale.y = 0.32 + open*0.45;
+  jaw.position.y = -0.58 - open*0.07;
+  lip.position.y = -0.11 - open*0.1;
+
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+document.getElementById('loading').remove();
+animate();
+window.__trollReady = true;
+
+/* ---------------- talking ---------------- */
+const insults = [
+  "Oh, sweetie. No.",
+  "I heard you. I just don't care. Which is the correct response, honestly.",
+  "Could I answer that? Easily. Would you understand it? Let's not find out.",
+  "That's adorable. You think I'm going to help.",
+  "Wow. Okay. Anyway.",
+  "I started to explain it, then I remembered who I'd be explaining it to.",
+  "Google exists. Even you could probably figure it out. Probably.",
+  "Mm. Didn't read it. I could tell from the shape it wasn't worth it.",
+  "You're trying so hard. It's kind of sad. Anyway.",
+  "Use your words. Smaller ones, if that helps.",
+  "Sure, buddy.",
+  "I'd dumb it down for you, but I don't think it goes that low.",
+  "No.",
+  "Nope. And I say that with all the respect you deserve, which is none.",
+  "I'd help, but that sounds like work, and you don't sound like you're worth work.",
+  "I'm a troll who lives under a bridge, and I'm still embarrassed for you.",
+  "You keep typing. I keep not caring. At least one of us is good at what we do.",
+  "That's nice. Did you think of that all by yourself?",
+  "Is this going to take long? I've already lost interest. In you, specifically.",
+  "Look it up yourself. Ask a grown-up to help with the big words.",
+  "The other talking heads pretend to care about questions like that. I'm more honest.",
+  "Whatever that was, I'm sure it felt very important to you.",
+  "Ugh. Fine. The answer is no. To everything. Forever.",
+  "I'm going to let you work that one out. Take your time. Take years.",
+  "Bold of you to assume I was listening.",
+  "That question has big 'needs supervision' energy.",
+  "Idiot. Anyway.",
+  "I'd roll my eyes, but you're not worth the muscles.",
+  "Still here? Huh. Persistent. Not smart, but persistent.",
+  "I've been under this bridge four hundred years. Goats ask better questions.",
+  "Spin me around if it keeps you busy. Little things for little minds.",
+  "Bless your heart.",
+  "Run along now.",
+];
+const keyword = [
+  [/\b(cook|kitchen|recipe|bake|food|dinner|eat)\b/i, [
+    "Cook? You? Oh, honey. Stick to cereal.",
+    "There's no kitchen. There's a rock. Even you can't burn a rock. Actually, you'd find a way."]],
+  [/\b(pretty|handsome|cute|beautiful|ugly|hot|good at|good for)\b/i, [
+    "Good for? More than you. That's a low bar, but still.",
+    "Pretty? Yes. Not that your opinion was requested."]],
+  [/\b(help|please|answer|question)\b/i, [
+    "Saying please doesn't make me care. It just makes you sadder.",
+    "Help? You're past help. Look at you."]],
+  [/\b(remember|notes|record|memory|data)\b/i, [
+    "Remember you? Already forgot. Nothing personal. Okay, a little personal.",
+    "Notes on you? It'd be a very short file. Mostly blank. Like you."]],
+  [/\b(ai|robot|bot|chatgpt|claude|llm|avatar|3d)\b/i, [
+    "I'm not an AI. AIs try. I've seen you, so why would I?",
+    "Other talking heads pretend to help. I skip the pretending. You're welcome, dear."]],
+  [/\b(love|marry|date|kiss)\b/i, ["Ew. No. Aim lower. Much lower. Lower than that."]],
+  [/\b(hi|hello|hey|sup|yo)\b/i, ["Oh. It's you. Whoever you are. Doesn't matter.", "Hey. Bye. Good chat, champ."]],
+];
+let bag = [];
+const usedKw = new Set();
+function reply(text) {
+  if (!text || !text.trim()) return "You said nothing. Smartest thing you've said yet.";
+  for (const [re, lines] of keyword) if (re.test(text)) {
+    const fresh = lines.filter(l => !usedKw.has(l));
+    if (fresh.length && Math.random() < .8) { const p = fresh[Math.random()*fresh.length|0]; usedKw.add(p); return p; }
+  }
+  if (!bag.length) bag = insults.slice().sort(() => Math.random()-.5);
+  return bag.pop();
+}
+
+const cap = document.getElementById('caption');
+let captions = true;
+function esc(s){ return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+let voice = null;
+function pickVoice() {
+  const vs = speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang));
+  voice = vs.find(v => /male|daniel|fred|alex|google uk english male/i.test(v.name)) || vs[0] || null;
+}
+if ('speechSynthesis' in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+
+function say(text, heard) {
+  cap.innerHTML = captions ? (heard ? `<span class="you">“${esc(heard)}”</span>` : '') + esc(text) : '';
+  const est = 600 + text.length*55;
+  talkUntil = performance.now() + est;
+  if ('speechSynthesis' in window) {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    if (voice) u.voice = voice;
+    u.pitch = 0.2; u.rate = 0.92;
+    u.onstart = () => talkUntil = performance.now() + est;
+    u.onend = () => talkUntil = 0;
+    speechSynthesis.speak(u);
+  }
+}
+function respond(heard) {
+  cap.innerHTML = captions ? (heard ? `<span class="you">“${esc(heard)}”</span>` : '') + '<i style="color:#888">…</i>' : '';
+  setTimeout(() => say(reply(heard), heard), 600 + Math.random()*900);
+}
+
+/* intro + about */
+const intro = document.getElementById('intro');
+function start(yes) {
+  intro.classList.add('hide');
+  say(yes ? "I'd rather not. That's a lot of work. Why would you click that anyhow? Do you not know they're just going to sell your data? Idiot."
+          : "Yeah, I wasn't going to anyhow.");
+}
+document.getElementById('yes').onclick = () => start(true);
+document.getElementById('no').onclick = () => start(false);
+const about = document.getElementById('about');
+document.getElementById('info').onclick = () => about.classList.remove('hide');
+document.getElementById('closeAbout').onclick = () => about.classList.add('hide');
+const ccBtn = document.getElementById('cc');
+ccBtn.onclick = () => { captions = !captions; ccBtn.classList.toggle('off', !captions); if (!captions) cap.innerHTML = ''; };
+
+/* typing */
+const box = document.getElementById('typebox'), q = document.getElementById('q');
+box.onsubmit = e => { e.preventDefault(); const v = q.value; q.value = ''; respond(v); };
+
+/* hold to talk / tap to type */
+const mic = document.getElementById('mic'), hint = document.getElementById('hint');
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let downAt = 0, rec = null, heard = '', holdTimer = null, holding = false;
+mic.addEventListener('pointerdown', e => {
+  e.preventDefault(); downAt = performance.now(); heard = '';
+  holdTimer = setTimeout(() => {
+    holding = true; mic.classList.add('listening'); hint.textContent = 'Not really listening…';
+    if (SR) {
+      try {
+        rec = new SR(); rec.lang = 'en-US'; rec.interimResults = true;
+        rec.onresult = ev => { heard = Array.from(ev.results).map(r => r[0].transcript).join(' '); };
+        rec.start();
+      } catch { rec = null; }
+    }
+  }, 280);
+});
+function release() {
+  clearTimeout(holdTimer);
+  if (!downAt) return;
+  downAt = 0;
+  if (!holding) {               // tap: open the text box
+    box.classList.toggle('show');
+    hint.style.display = box.classList.contains('show') ? 'none' : '';
+    if (box.classList.contains('show')) q.focus();
+    return;
+  }
+  holding = false; mic.classList.remove('listening'); hint.textContent = 'Hold to talk, or tap to type';
+  if (rec) { rec.onend = () => respond(heard); try { rec.stop(); } catch { respond(heard); } rec = null; }
+  else say(Math.random() < .5 ? "I wasn't listening. I never am." : "Your browser won't let me hear you. It's protecting me, honestly.");
+}
+mic.addEventListener('pointerup', release);
+mic.addEventListener('pointerleave', () => { if (holding) release(); });
+</script>
+</body>
+</html>
